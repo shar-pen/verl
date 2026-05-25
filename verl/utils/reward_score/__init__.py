@@ -41,11 +41,11 @@ def default_compute_score(
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
-    if data_source == "openai/gsm8k":
+    if data_source == "openai/gsm8k" or data_source.startswith("gsm8k_style"):
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"]:
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval", "HuggingFaceH4/MATH-500"] or data_source.startswith("math_reward_style"):
         from . import math_reward
 
         res = math_reward.compute_score(solution_str, ground_truth)
@@ -56,7 +56,7 @@ def default_compute_score(
 
         # from . import math_verify
         # res = math_verify.compute_score(solution_str, ground_truth)
-    elif data_source in ["math_dapo", "math", "math_dapo_reasoning"] or data_source.startswith("aime"):
+    elif data_source in ["math_dapo", "math", "math_dapo_reasoning"] or data_source.startswith("aime") or data_source.startswith("math_dapo_style"):
         from . import math_dapo
 
         res = math_dapo.compute_score(solution_str, ground_truth)
