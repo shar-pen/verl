@@ -73,6 +73,12 @@ algorithm:
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 
+  # Positive-advantage scale used by GRPO-PNSR
+  psr_weight: 1.0
+
+  # Negative-advantage scale used by GRPO-PNSR
+  nsr_weight: 1.0
+
   # Whether to enable in-reward KL penalty
   use_kl_in_reward: False
 
