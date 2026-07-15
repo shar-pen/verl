@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-export WANDB_MODE=offline
+# export WANDB_MODE=offline
 export PYTHONWARNINGS="ignore"
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 NNODES=1
 NGPUS_PER_NODE=4
 
 project_name='DAPO_MATH_17K-AIME_24'
-exp_name='DAPO-Qwen2.5_MATH_7B_EXT'
+exp_name='DAPO-Qwen2.5_MATH_1.5B_EXT'
 
 # algo setting
 adv_estimator=grpo
@@ -21,7 +21,7 @@ clip_ratio_low=0.2
 clip_ratio_high=0.28
 
 # batch size 
-train_prompt_bsz=256
+train_prompt_bsz=128
 train_prompt_mini_bsz=32
 enable_filter_groups=True
 filter_groups_metric=acc
@@ -32,7 +32,7 @@ max_num_gen_batches=-1
 max_prompt_length=$((1024 * 2))
 max_response_length=$((1024 * 6))
 enable_overlong_buffer=True
-overlong_buffer_len=$((1024 * 4))
+overlong_buffer_len=$((1024 * 2))
 overlong_penalty_factor=1.0
 
 train_n_resp_per_prompt=8
@@ -53,18 +53,18 @@ NNODES=${NNODES:-8}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
 # Paths
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
-MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-Math-7B-EXT"}
+MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-Math-1.5B-EXT"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"${RAY_DATA_HOME}/data/dapo_math_17k/train_deduped.parquet"}
 TEST_FILE=${TEST_FILE:-"${RAY_DATA_HOME}/data/aime/aime2024.parquet"}
 
 # Performance Related Parameter
-sp_size=4
+sp_size=1
 use_dynamic_bsz=True
-actor_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 1 / sp_size))
-infer_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 8 / sp_size))
+actor_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 2))
+infer_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 16))
 offload=True
-gen_tp=4
+gen_tp=1
 fsdp_size=32
 
 # remember to set VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 for this model
@@ -150,11 +150,10 @@ python3 -m exp.dapo.main_dapo \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
 	\
     reward_model.reward_manager=dapo \
-    reward_model.reward_kwargs.overlong_buffer_cfg.enable=${enable_overlong_buffer} \
-    reward_model.reward_kwargs.overlong_buffer_cfg.len=${overlong_buffer_len} \
-    reward_model.reward_kwargs.overlong_buffer_cfg.penalty_factor=${overlong_penalty_factor} \
-    reward_model.reward_kwargs.overlong_buffer_cfg.log=False \
-    reward_model.reward_kwargs.max_resp_len=${max_response_length} 
+    reward_model.overlong_buffer.enable=${enable_overlong_buffer} \
+    reward_model.overlong_buffer.len=${overlong_buffer_len} \
+    reward_model.overlong_buffer.penalty_factor=${overlong_penalty_factor} \
+    reward_model.overlong_buffer.log=False \
 
 
 

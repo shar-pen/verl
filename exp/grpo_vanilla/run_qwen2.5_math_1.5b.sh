@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # export WANDB_MODE=offline
 export PYTHONWARNINGS="ignore"
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 NNODES=1
-NGPUS_PER_NODE=8
+NGPUS_PER_NODE=4
 
 project_name='DAPO_MATH_17K-AIME_24'
-exp_name='GRPO-Qwen2.5_MATH_7B_EXT'
+exp_name='GRPO-Qwen2.5_MATH_1.5B_EXT-sample16'
 
 # algo setting
 adv_estimator=grpo
@@ -21,19 +21,21 @@ clip_ratio_low=0.2
 clip_ratio_high=${clip_ratio_low}
 
 # batch size 
-train_prompt_bsz=256
+train_prompt_bsz=128
 train_prompt_mini_bsz=32
 
 # rollout
-
 max_prompt_length=$((1024 * 2))
 max_response_length=$((1024 * 6))
 
-n_resp_per_prompt=16
+train_n_resp_per_prompt=16
+train_temperature=1.0
+train_top_k=-1 # 0 for HF rollout, -1 for vLLM rollout
+train_top_p=1.0
+
 val_n_resp_per_prompt=32
-temperature=1.0
-top_k=-1 # 0 for HF rollout, -1 for vLLM rollout
-top_p=1.0
+val_temperature=1.0
+val_top_k=-1
 val_top_p=0.7
 
 # Ray
@@ -44,7 +46,7 @@ NNODES=${NNODES:-8}
 NGPUS_PER_NODE=${NGPUS_PER_NODE:-8}
 # Paths
 RAY_DATA_HOME=${RAY_DATA_HOME:-"${HOME}/verl"}
-MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-Math-7B-EXT"}
+MODEL_PATH=${MODEL_PATH:-"${RAY_DATA_HOME}/models/Qwen2.5-Math-1.5B-EXT"}
 CKPTS_DIR=${CKPTS_DIR:-"${RAY_DATA_HOME}/ckpts/${project_name}/${exp_name}"}
 TRAIN_FILE=${TRAIN_FILE:-"${RAY_DATA_HOME}/data/dapo_math_17k/train_deduped.parquet"}
 TEST_FILE=${TEST_FILE:-"${RAY_DATA_HOME}/data/aime/aime2024.parquet"}
@@ -52,7 +54,7 @@ TEST_FILE=${TEST_FILE:-"${RAY_DATA_HOME}/data/aime/aime2024.parquet"}
 # Performance Related Parameter
 sp_size=1
 use_dynamic_bsz=True
-actor_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 1))
+actor_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 2))
 infer_ppo_max_token_len=$(((max_prompt_length + max_response_length) * 16))
 offload=True
 gen_tp=1
@@ -67,11 +69,11 @@ python3 -m verl.trainer.main_ppo \
     trainer.n_gpus_per_node="${NGPUS_PER_NODE}" \
     trainer.nnodes="${NNODES}" \
 	\
-    trainer.val_before_train=False \
+    trainer.val_before_train=True \
     trainer.test_freq=5 \
-    trainer.save_freq=100 \
+    trainer.save_freq=10 \
     trainer.total_training_steps=200 \
-    trainer.total_epochs=10 \
+    trainer.total_epochs=100 \
     trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=auto \
     trainer.log_val_generations=10 \
@@ -83,6 +85,7 @@ python3 -m verl.trainer.main_ppo \
     data.max_prompt_length=${max_prompt_length} \
     data.max_response_length=${max_response_length} \
     data.train_batch_size=${train_prompt_bsz} \
+    data.filter_overlong_prompts=True \
 	\
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
@@ -124,14 +127,14 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=${gen_tp} \
     actor_rollout_ref.rollout.enable_chunked_prefill=True \
     actor_rollout_ref.rollout.max_num_batched_tokens=$((max_prompt_length + max_response_length)) \
-    actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
-    actor_rollout_ref.rollout.temperature=${temperature} \
-    actor_rollout_ref.rollout.top_p=${top_p} \
-    actor_rollout_ref.rollout.top_k=${top_k} \
+    actor_rollout_ref.rollout.n=${train_n_resp_per_prompt} \
+    actor_rollout_ref.rollout.temperature=${train_temperature} \
+    actor_rollout_ref.rollout.top_p=${train_top_p} \
+    actor_rollout_ref.rollout.top_k=${train_top_k} \
     actor_rollout_ref.rollout.val_kwargs.n=${val_n_resp_per_prompt} \
-    actor_rollout_ref.rollout.val_kwargs.temperature=${temperature} \
+    actor_rollout_ref.rollout.val_kwargs.temperature=${val_temperature} \
     actor_rollout_ref.rollout.val_kwargs.top_p=${val_top_p} \
-    actor_rollout_ref.rollout.val_kwargs.top_k=${top_k} \
+    actor_rollout_ref.rollout.val_kwargs.top_k=${val_top_k} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
 	\
     reward_model.reward_manager=naive 
