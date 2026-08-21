@@ -268,6 +268,71 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     return metrics
 
 
+def compute_validation_response_length_metrics(
+    data_sources: list[str] | np.ndarray,
+    response_lengths: list[float] | np.ndarray,
+    max_response_length: int | None,
+) -> dict[str, dict[str, float]]:
+    """Compute validation response-length metrics grouped by data source.
+
+    The returned metric names mirror the response-length metrics emitted by
+    :func:`compute_data_metrics` during training.
+    """
+    if len(data_sources) != len(response_lengths):
+        raise ValueError(
+            "data_sources and response_lengths must contain the same number of samples, "
+            f"but got {len(data_sources)} and {len(response_lengths)}"
+        )
+    if max_response_length is not None and max_response_length <= 0:
+        raise ValueError(f"max_response_length must be greater than 0, but got {max_response_length}")
+
+    data_source_to_lengths: dict[str, list[float]] = defaultdict(list)
+    for data_source, response_length in zip(data_sources, response_lengths, strict=True):
+        data_source_to_lengths[str(data_source)].append(float(response_length))
+
+    metrics_by_data_source = {}
+    for data_source, lengths in data_source_to_lengths.items():
+        lengths_array = np.asarray(lengths, dtype=np.float64)
+        aborted_mask = lengths_array == 0
+        non_aborted_lengths = lengths_array[~aborted_mask]
+
+        metrics = {
+            "response_length/mean": float(np.mean(lengths_array)),
+            "response_length/max": float(np.max(lengths_array)),
+            "response_length/min": float(np.min(lengths_array)),
+            "response/aborted_ratio": float(np.mean(aborted_mask)),
+        }
+        if max_response_length is not None:
+            metrics["response_length/clip_ratio"] = float(np.mean(lengths_array == max_response_length))
+
+        if non_aborted_lengths.size > 0:
+            metrics.update(
+                {
+                    "response_length_non_aborted/mean": float(np.mean(non_aborted_lengths)),
+                    "response_length_non_aborted/max": float(np.max(non_aborted_lengths)),
+                    "response_length_non_aborted/min": float(np.min(non_aborted_lengths)),
+                }
+            )
+            if max_response_length is not None:
+                metrics["response_length_non_aborted/clip_ratio"] = float(
+                    np.mean(non_aborted_lengths == max_response_length)
+                )
+        else:
+            metrics.update(
+                {
+                    "response_length_non_aborted/mean": float("nan"),
+                    "response_length_non_aborted/max": float("nan"),
+                    "response_length_non_aborted/min": float("nan"),
+                }
+            )
+            if max_response_length is not None:
+                metrics["response_length_non_aborted/clip_ratio"] = float("nan")
+
+        metrics_by_data_source[data_source] = metrics
+
+    return metrics_by_data_source
+
+
 def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> dict[str, Any]:
     """
     Computes timing metrics for different processing stages in PPO training.
@@ -583,6 +648,8 @@ def process_validation_metrics(
         - "std@N": Standard deviation across N samples
         - "best@N/mean": Mean of the best values in bootstrap samples of size N
         - "best@N/std": Standard deviation of the best values in bootstrap samples
+        - "max@N/mean": Mean of the maximum values in bootstrap samples of size N
+        - "max@N/std": Standard deviation of the maximum values in bootstrap samples
         - "worst@N/mean": Mean of the worst values in bootstrap samples
         - "worst@N/std": Standard deviation of the worst values in bootstrap samples
         - "maj@N/mean": Mean of majority voting results in bootstrap samples (if "pred" exists)
@@ -664,6 +731,11 @@ def process_validation_metrics(
                         )
                         metric[f"best@{n}/mean"] = bon_mean
                         metric[f"best@{n}/std"] = bon_std
+                        # Explicit non-binary analogue of pass@n. Keep best@n
+                        # unchanged while naming the maximum-reward statistic.
+                        if var_name in {"reward", "score"}:
+                            metric[f"max@{n}/mean"] = bon_mean
+                            metric[f"max@{n}/std"] = bon_std
                         metric[f"worst@{n}/mean"] = won_mean
                         metric[f"worst@{n}/std"] = won_std
 

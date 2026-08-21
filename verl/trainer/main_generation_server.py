@@ -175,12 +175,27 @@ def main(config):
     results = np.array([result.choices[0].message.content for result in results])
     results = np.reshape(results, (-1, n_samples))
 
+    # Preserve token-level response lengths for offline evaluation. The
+    # generation API returns text only, so tokenize the completions before
+    # writing the output parquet.
+    from verl.utils import hf_tokenizer
+
+    tokenizer = hf_tokenizer(
+        config.actor_rollout_ref.model.path,
+        trust_remote_code=config.data.get("trust_remote_code", False),
+    )
+    response_lengths = np.asarray(
+        [[len(tokenizer.encode(response, add_special_tokens=False)) for response in row] for row in results],
+        dtype=np.int64,
+    )
+
     assert results.shape == (len(chat_lst), n_samples)
 
     results = results.tolist()
 
     # add to the data frame
     dataset["responses"] = results
+    dataset["response_lengths"] = response_lengths.tolist()
 
     # write to a new parquet
     output_dir = os.path.dirname(config.data.output_path)

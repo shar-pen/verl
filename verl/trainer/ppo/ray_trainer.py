@@ -45,6 +45,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
+    compute_validation_response_length_metrics,
     compute_variance_proxy_metrics,
     process_validation_metrics,
 )
@@ -607,6 +608,7 @@ class RayPPOTrainer:
         sample_scores = []
         sample_turns = []
         sample_uids = []
+        sample_response_lengths = []
 
         for test_data in self.val_dataloader:
             test_batch = DataProto.from_single_dict(test_data)
@@ -665,6 +667,13 @@ class RayPPOTrainer:
             test_batch = test_batch.union(test_output_gen_batch)
             test_batch.meta_info["validate"] = True
 
+            if "response_length" in test_batch.batch:
+                response_lengths = test_batch.batch["response_length"]
+            else:
+                max_response_length = test_batch.batch["responses"].shape[-1]
+                response_lengths = test_batch.batch["attention_mask"][:, -max_response_length:].sum(dim=-1)
+            sample_response_lengths.extend(response_lengths.cpu().tolist())
+
             # Store original inputs
             input_ids = test_batch.batch["prompts"]
             # TODO: Can we keep special tokens except for padding tokens?
@@ -716,12 +725,17 @@ class RayPPOTrainer:
                 "data_sources": data_source_lst,
                 "sample_uids": sample_uids,
                 "sample_turns": sample_turns,
+                "sample_response_lengths": sample_response_lengths,
                 "reward_extra_infos_dict": reward_extra_infos_dict,
             }
         data_sources = np.concatenate(data_source_lst, axis=0)
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources, sample_uids, reward_extra_infos_dict, sample_turns, sample_response_lengths
+        )
 
-    def _val_metrics_update(self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns):
+    def _val_metrics_update(
+        self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns, sample_response_lengths
+    ):
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
@@ -731,7 +745,7 @@ class RayPPOTrainer:
                 for metric_name, metric_val in metric2val.items():
                     if (
                         (var_name == core_var)
-                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"])
+                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best", "max"])
                         and (f"@{n_max}" in metric_name)
                     ):
                         metric_sec = "val-core"
@@ -739,6 +753,15 @@ class RayPPOTrainer:
                         metric_sec = "val-aux"
                     pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
                     metric_dict[pfx] = metric_val
+
+        response_length_metrics = compute_validation_response_length_metrics(
+            data_sources=data_sources,
+            response_lengths=sample_response_lengths,
+            max_response_length=self.config.actor_rollout_ref.rollout.response_length,
+        )
+        for data_source, metrics in response_length_metrics.items():
+            for metric_name, metric_val in metrics.items():
+                metric_dict[f"val-aux/{data_source}/{metric_name}"] = metric_val
 
         if len(sample_turns) > 0:
             sample_turns = np.concatenate(sample_turns)
@@ -752,9 +775,21 @@ class RayPPOTrainer:
         if result_a is None and result_b is None:
             return {}
         if result_a is None:
-            result_a = {"data_sources": [], "sample_uids": [], "sample_turns": [], "reward_extra_infos_dict": {}}
+            result_a = {
+                "data_sources": [],
+                "sample_uids": [],
+                "sample_turns": [],
+                "sample_response_lengths": [],
+                "reward_extra_infos_dict": {},
+            }
         if result_b is None:
-            result_b = {"data_sources": [], "sample_uids": [], "sample_turns": [], "reward_extra_infos_dict": {}}
+            result_b = {
+                "data_sources": [],
+                "sample_uids": [],
+                "sample_turns": [],
+                "sample_response_lengths": [],
+                "reward_extra_infos_dict": {},
+            }
 
         if not result_a.get("data_sources") and not result_b.get("data_sources"):
             return {}
@@ -762,6 +797,9 @@ class RayPPOTrainer:
         data_sources = np.concatenate(result_a["data_sources"] + result_b["data_sources"], axis=0)
         sample_uids = result_a["sample_uids"] + result_b["sample_uids"]
         sample_turns = result_a["sample_turns"] + result_b["sample_turns"]
+        sample_response_lengths = result_a.get("sample_response_lengths", []) + result_b.get(
+            "sample_response_lengths", []
+        )
 
         reward_extra_infos_dict = {}
         all_keys = set(result_a["reward_extra_infos_dict"].keys()) | set(result_b["reward_extra_infos_dict"].keys())
@@ -770,7 +808,9 @@ class RayPPOTrainer:
             list_b = result_b["reward_extra_infos_dict"].get(key, [])
             reward_extra_infos_dict[key] = list_a + list_b
 
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources, sample_uids, reward_extra_infos_dict, sample_turns, sample_response_lengths
+        )
 
     def init_workers(self):
         """Initialize distributed training workers using Ray backend.
