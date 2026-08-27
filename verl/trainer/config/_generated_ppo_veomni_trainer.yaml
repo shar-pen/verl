@@ -821,6 +821,8 @@ algorithm:
     metric: null
     max_num_gen_batches: 0
     max_inflight_gen_batches: 1
+  psr_weight: 1.0
+  nsr_weight: 1.0
   use_kl_in_reward: false
   kl_penalty: kl
   kl_ctrl:

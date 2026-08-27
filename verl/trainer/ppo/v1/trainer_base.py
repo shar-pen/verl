@@ -56,6 +56,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_moe_lb_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
+    compute_validation_response_length_metrics,
     compute_variance_proxy_metrics,
     get_metric_data_with_optional_routed_experts,
     process_validation_metrics,
@@ -964,6 +965,7 @@ class PPOTrainer(ABC):
         sample_gts = []
         sample_scores = []
         sample_turns = []
+        sample_response_lengths = []
         data_sources = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
         dump_all_inputs: list[str] = []
@@ -1022,6 +1024,7 @@ class PPOTrainer(ABC):
             text_data = tq.kv_batch_get(
                 keys=batch.keys, partition_id=batch.partition_id, select_fields=["prompts", "responses"]
             )
+            all_response_lengths = text_data["responses"].offsets().diff().tolist()
             text_data["prompts"] = text_data["prompts"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
             text_data["responses"] = text_data["responses"].to_padded_tensor(padding=self.tokenizer.pad_token_id)
             all_inputs = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in text_data["prompts"]]
@@ -1036,6 +1039,7 @@ class PPOTrainer(ABC):
             scores = data["rm_scores"].sum(dim=1).tolist()
             sample_scores.extend(scores)
             sample_turns.extend(data.pop("num_turns").tolist())
+            sample_response_lengths.extend(all_response_lengths[i] for i in final_indices)
             reward_extra_infos_dict["reward"].extend(scores)
 
             extra_fields_list = data.pop("extra_fields", None)
@@ -1109,7 +1113,9 @@ class PPOTrainer(ABC):
                 dump_path=val_data_dir,
             )
 
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources, sample_uids, reward_extra_infos_dict, sample_turns, sample_response_lengths
+        )
 
     def _maybe_log_val_generations(self, inputs, outputs, scores):
         """Log a table of validation samples to the configured logger (wandb or swanlab)"""
@@ -1248,7 +1254,9 @@ class PPOTrainer(ABC):
                 dump_path=rollout_data_dir,
             )
 
-    def _val_metrics_update(self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns) -> dict[str, float]:
+    def _val_metrics_update(
+        self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns, sample_response_lengths
+    ) -> dict[str, float]:
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
@@ -1258,7 +1266,7 @@ class PPOTrainer(ABC):
                 for metric_name, metric_val in metric2val.items():
                     if (
                         (var_name == core_var)
-                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"])
+                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best", "max"])
                         and (f"@{n_max}" in metric_name)
                     ):
                         metric_sec = "val-core"
@@ -1266,6 +1274,15 @@ class PPOTrainer(ABC):
                         metric_sec = "val-aux"
                     pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
                     metric_dict[pfx] = metric_val
+
+        response_length_metrics = compute_validation_response_length_metrics(
+            data_sources=data_sources,
+            response_lengths=sample_response_lengths,
+            max_response_length=self.config.actor_rollout_ref.rollout.response_length,
+        )
+        for data_source, metrics in response_length_metrics.items():
+            for metric_name, metric_val in metrics.items():
+                metric_dict[f"val-aux/{data_source}/{metric_name}"] = metric_val
 
         if len(sample_turns) > 0:
             sample_turns = np.array(sample_turns)

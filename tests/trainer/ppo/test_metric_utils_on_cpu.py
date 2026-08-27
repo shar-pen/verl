@@ -27,6 +27,7 @@ from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
+    compute_validation_response_length_metrics,
     process_validation_metrics,
 )
 from verl.utils.metric import (
@@ -551,6 +552,10 @@ class TestProcessValidationMetrics(unittest.TestCase):
         # Check the value of mean@2 for source1/score
         self.assertAlmostEqual(result["source1"]["score"]["mean@2"], 0.85)
 
+        # Non-binary score metrics expose the maximum-reward analogue of pass@n.
+        self.assertIn("max@2/mean", result["source1"]["score"])
+        self.assertIn("max@2/std", result["source1"]["score"])
+
     def test_process_validation_metrics_with_pred(self):
         """Test process_validation_metrics with prediction data."""
         data_sources = ["source1", "source1", "source1"]
@@ -567,6 +572,38 @@ class TestProcessValidationMetrics(unittest.TestCase):
 
         # For bootstrap with n=2, the majority vote could be either A or B
         # depending on the random sampling, so we don't check the exact value
+
+
+class TestComputeValidationResponseLengthMetrics(unittest.TestCase):
+    def test_metrics_are_grouped_by_data_source(self):
+        metrics = compute_validation_response_length_metrics(
+            data_sources=["gsm8k", "gsm8k", "math", "math"],
+            response_lengths=[0, 8, 4, 8],
+            max_response_length=8,
+        )
+
+        self.assertEqual(metrics["gsm8k"]["response_length/mean"], 4.0)
+        self.assertEqual(metrics["gsm8k"]["response_length/max"], 8.0)
+        self.assertEqual(metrics["gsm8k"]["response_length/min"], 0.0)
+        self.assertEqual(metrics["gsm8k"]["response_length/clip_ratio"], 0.5)
+        self.assertEqual(metrics["gsm8k"]["response/aborted_ratio"], 0.5)
+        self.assertEqual(metrics["gsm8k"]["response_length_non_aborted/mean"], 8.0)
+
+        self.assertEqual(metrics["math"]["response_length/mean"], 6.0)
+        self.assertEqual(metrics["math"]["response_length/clip_ratio"], 0.5)
+        self.assertEqual(metrics["math"]["response/aborted_ratio"], 0.0)
+
+    def test_all_aborted_samples_return_nan_non_aborted_metrics(self):
+        metrics = compute_validation_response_length_metrics(
+            data_sources=["gsm8k", "gsm8k"],
+            response_lengths=[0, 0],
+            max_response_length=8,
+        )["gsm8k"]
+
+        self.assertTrue(np.isnan(metrics["response_length_non_aborted/mean"]))
+        self.assertTrue(np.isnan(metrics["response_length_non_aborted/max"]))
+        self.assertTrue(np.isnan(metrics["response_length_non_aborted/min"]))
+        self.assertTrue(np.isnan(metrics["response_length_non_aborted/clip_ratio"]))
 
 
 if __name__ == "__main__":
